@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "es2022", //esnext es la version por defecto, pero se usa es2022 | con esnext tendriamos las caracteristicas nuevas, pero puede volver imcompattible si se actualiza la version
+    "module": "nodenext",
+    "moduleResolution": "nodenext", //para que typescript resuelva los modulos de node, y pueda usar import/export
+    "paths":{
+      "@/*": ["./src/*"],
+      "@core/*": ["./src/core/*"],
+      "@modules/*": ["./src/modules/*"],
+      "@config/*": ["./src/config/*"],
+      "@loaders/*": ["./src/loaders/*"],
+    },
+    "outDir": "./dist", //donde se guardan los archivos compilados
+    "rootDir": "./src", //donde se encuentran los archivos fuente
+
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"], //donde se encuentran los archivos fuente
+  "exclude": ["node_modules", "dist"] //donde se guardan los archivos compilados
+}
