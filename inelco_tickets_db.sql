@@ -1,5 +1,5 @@
 /*
-  base de tickets (consultas, soluciones, reasignaciones)
+  base de consultas tecnicas y comerciales segun el MER (inelco_tickets_db)
 
   la base se crea aparte, una sola vez:
     psql -U postgres -c "CREATE DATABASE inelco_tickets_db"
@@ -7,25 +7,42 @@
   y despues se corre este script dentro de ella:
     psql -U postgres -d inelco_tickets_db -f inelco_tickets_db.sql
 
-  desde psql tambien sirve: \c inelco_tickets_db y luego \i inelco_tickets_db.sql
   se puede ejecutar varias veces, las tablas y los datos iniciales no se duplican
 */
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
-
 /*
-  catalogos fijos
+  enums del MER
 
-  topicos agrupa de que trata la consulta y se puede apagar con activo sin borrarlo.
-  prioridades y estados son listas cortas que casi no cambian, pero viven en tabla
-  y no en un check porque las consultas los referencian por id.
+  CREATE TYPE no tiene IF NOT EXISTS, por eso se captura el error si el tipo ya existe
+  y asi el script se puede volver a correr.
 */
+DO $$ BEGIN
+    CREATE TYPE enum_estado_consulta AS ENUM ('abierta', 'en_progreso', 'cerrada');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE enum_origen_solucion AS ENUM ('ia', 'tecnico', 'base_conocimiento');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE enum_estado_solucion AS ENUM ('propuesta', 'aplicada', 'verificada', 'fallida');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE enum_tipo_solucion AS ENUM ('temporal', 'definitiva', 'parche');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+
+-- catalogos
 CREATE TABLE IF NOT EXISTS topicos (
     id SERIAL PRIMARY KEY,
     nombre VARCHAR(100) NOT NULL UNIQUE,
     descripcion TEXT,
-    activo BOOLEAN DEFAULT TRUE
+    activo BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS prioridades (
@@ -33,24 +50,16 @@ CREATE TABLE IF NOT EXISTS prioridades (
     nombre VARCHAR(50) NOT NULL UNIQUE
 );
 
-CREATE TABLE IF NOT EXISTS estados_consulta (
-    id SERIAL PRIMARY KEY,
-    nombre VARCHAR(50) NOT NULL UNIQUE
-);
-
 
 /*
-  consulta: entidad base
+  consulta: entidad base de la especializacion (ISA del MER)
 
   junta lo que comparten todas las consultas, sean tecnicas o comerciales. lo propio
   de cada tipo va en su subclase para no llenar esta tabla de columnas casi siempre nulas.
 
-  cliente_id y empleado_id apuntan a usuarios de inelco_users_db. no llevan fk porque
-  es otra base, la relacion es solo logica. cliente_id puede ser null cuando consulta
-  alguien sin cuenta (comercial), y empleado_id se completa recien cuando se asigna.
-
-  estado_id arranca en 1, que es abierta (ver los inserts de mas abajo).
-  la calificacion la carga el cliente al final, de 1 a 5.
+  cliente_id y empleado_id apuntan a inelco_users_db (clientes.id y empleados.id).
+  no llevan fk porque es otra base: la relacion es solo logica (las entidades con * del MER).
+  cliente_id puede ser null (consulta de un invitado) y empleado_id se completa al asignar.
 */
 CREATE TABLE IF NOT EXISTS consultas (
     id SERIAL PRIMARY KEY,
@@ -58,15 +67,15 @@ CREATE TABLE IF NOT EXISTS consultas (
     empleado_id UUID NULL,
     topico_id INTEGER NOT NULL REFERENCES topicos(id),
     prioridad_id INTEGER NOT NULL REFERENCES prioridades(id),
-    estado_id INTEGER NOT NULL DEFAULT 1 REFERENCES estados_consulta(id),
+    estado enum_estado_consulta NOT NULL DEFAULT 'abierta',
     descripcion TEXT NOT NULL,
-    fue_autogestionada BOOLEAN DEFAULT FALSE,
-    intervencion_ia BOOLEAN DEFAULT FALSE,
-    veces_reabierta INTEGER DEFAULT 0,
-    calificacion_atencion INTEGER CHECK (calificacion_atencion BETWEEN 1 AND 5),
-    fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    fecha_actualizacion TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    fecha_cierre TIMESTAMP WITH TIME ZONE NULL
+    fue_autogestionada BOOLEAN NOT NULL DEFAULT FALSE,
+    intervencion_ia BOOLEAN NOT NULL DEFAULT FALSE,
+    veces_reabierta INTEGER NOT NULL DEFAULT 0,
+    calificacion_atencion INTEGER NULL CHECK (calificacion_atencion BETWEEN 1 AND 5),
+    fecha_creacion TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fecha_actualizacion TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fecha_cierre TIMESTAMPTZ NULL
 );
 
 
@@ -76,8 +85,7 @@ CREATE TABLE IF NOT EXISTS consultas (
   datos_sistema_cache es jsonb y no un conjunto de columnas porque lo que llega depende
   del equipo y de la version del sistema externo: las variables van cambiando y no hay
   un formato fijo al que atarse. jsonb guarda la foto tal cual llega al abrir la consulta,
-  y aun asi se puede filtrar por clave (datos_sistema_cache->>'modelo') o indexar con gin,
-  sin migrar la tabla cada vez que aparece un dato nuevo.
+  y aun asi se puede filtrar por clave (datos_sistema_cache->>'modelo') o indexar con gin.
 */
 CREATE TABLE IF NOT EXISTS consultas_tecnicas (
     consulta_id INTEGER PRIMARY KEY REFERENCES consultas(id) ON DELETE CASCADE,
@@ -97,27 +105,28 @@ CREATE TABLE IF NOT EXISTS consultas_comerciales (
     guest_nombre VARCHAR(100) NULL,
     guest_email VARCHAR(150) NULL,
     guest_telefono VARCHAR(50) NULL,
-    derivada_a_ventas BOOLEAN DEFAULT FALSE
+    derivada_a_ventas BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 
 /*
   soluciones
 
-  origen, estado y tipo usan check y no tabla aparte: son pocos valores y casi nunca
-  cambian. es_publica marca las que pueden pasar a la base de conocimiento.
+  empleado_id puede ser null: una solucion propuesta por la ia no tiene empleado
+  (relacion "elabora" parcial en el MER). es_publica marca las que pasan a la base
+  de conocimiento.
 */
 CREATE TABLE IF NOT EXISTS soluciones (
     id SERIAL PRIMARY KEY,
     consulta_id INTEGER NOT NULL REFERENCES consultas(id) ON DELETE CASCADE,
-    empleado_id UUID NOT NULL,
+    empleado_id UUID NULL,
     descripcion TEXT NOT NULL,
-    origen VARCHAR(50) NOT NULL CHECK (origen IN ('ia', 'tecnico', 'base_conocimiento')),
-    estado_solucion VARCHAR(50) NOT NULL DEFAULT 'propuesta' CHECK (estado_solucion IN ('propuesta', 'aplicada', 'verificada', 'fallida')),
-    tipo_solucion VARCHAR(50) NOT NULL CHECK (tipo_solucion IN ('temporal', 'definitiva', 'parche')),
-    es_publica BOOLEAN DEFAULT FALSE,
-    fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    fecha_actualizacion TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    es_publica BOOLEAN NOT NULL DEFAULT FALSE,
+    origen enum_origen_solucion NOT NULL,
+    estado enum_estado_solucion NOT NULL DEFAULT 'propuesta',
+    tipo enum_tipo_solucion NOT NULL,
+    fecha_creacion TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fecha_actualizacion TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 
@@ -125,38 +134,29 @@ CREATE TABLE IF NOT EXISTS soluciones (
   historial de reasignaciones
 
   cada cambio de tecnico es una fila nueva, asi no se pierde quien tuvo la consulta
-  antes. tecnico_origen_id es null en la primera asignacion.
+  antes. tecnico_origen_id es null en la primera asignacion y el motivo es opcional.
 */
 CREATE TABLE IF NOT EXISTS reasignaciones_tecnico (
     id SERIAL PRIMARY KEY,
     consulta_id INTEGER NOT NULL REFERENCES consultas(id) ON DELETE CASCADE,
     tecnico_origen_id UUID NULL,
     tecnico_destino_id UUID NOT NULL,
-    motivo TEXT NOT NULL,
-    fecha_asignacion TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    motivo TEXT NULL,
+    fecha_asignacion TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 
 /*
   datos iniciales
 
-  hacen falta para que el sistema arranque: sin la fila 'Abierta' como id 1, el default
-  de consultas.estado_id no tiene a que apuntar. por eso el orden de los estados importa.
-  on conflict permite volver a correr el script sin duplicar nada.
-  los topicos son de ejemplo, ajustarlos a lo que realmente atiende inelco.
+  solo los catalogos. los topicos son de ejemplo, ajustarlos a lo que realmente
+  atiende inelco.
 */
-INSERT INTO estados_consulta (nombre) VALUES
-    ('Abierta'),
-    ('En Progreso'),
-    ('Resuelta'),
-    ('Cerrada')
-ON CONFLICT (nombre) DO NOTHING;
-
 INSERT INTO prioridades (nombre) VALUES
     ('Baja'),
     ('Media'),
     ('Alta'),
-    ('Critica')
+    ('Urgente')
 ON CONFLICT (nombre) DO NOTHING;
 
 INSERT INTO topicos (nombre, descripcion) VALUES
