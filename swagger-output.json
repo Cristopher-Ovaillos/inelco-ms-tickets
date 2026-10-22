@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:3000/api"
+      "url": "http://localhost:3003/api"
     }
   ],
   "paths": {
@@ -21,6 +21,68 @@
         "responses": {
           "default": {
             "description": ""
+          }
+        }
+      }
+    },
+    "/consultas/tecnicas": {
+      "post": {
+        "tags": [
+          "Consultas"
+        ],
+        "summary": "Crea una consulta técnica y guarda el clima del lugar como foto del sistema",
+        "description": "",
+        "responses": {
+          "201": {
+            "description": "Consulta creada"
+          },
+          "400": {
+            "description": "Datos inválidos o tópico/prioridad inexistente"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "cliente_id": {
+                    "type": "string",
+                    "example": "id de un cliente de users"
+                  },
+                  "topico_id": {
+                    "type": "integer",
+                    "example": 1
+                  },
+                  "prioridad_id": {
+                    "type": "integer",
+                    "example": 3
+                  },
+                  "descripcion": {
+                    "type": "string",
+                    "example": "La central de incendio marca falla de lazo"
+                  },
+                  "sistema_externo_id": {
+                    "type": "string",
+                    "example": "CENTRAL-0042"
+                  },
+                  "ubicacion": {
+                    "type": "object",
+                    "properties": {
+                      "latitud": {
+                        "type": "number",
+                        "example": -32.95
+                      },
+                      "longitud": {
+                        "type": "number",
+                        "example": -60.64
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

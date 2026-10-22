@@ -51,5 +51,9 @@ export const config = {
     ai: {
         url: process.env.AI_SERVICE_URL || '',
         apiKey: process.env.AI_SERVICE_API_KEY || ''
+    },
+    clima: {
+        url: process.env.CLIMA_API_URL || 'https://api.open-meteo.com/v1/forecast',
+        timeoutMs: parseInt(process.env.CLIMA_TIMEOUT_MS || '3000', 10)
     }
 };
